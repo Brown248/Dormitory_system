@@ -1,10 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function SidebarLinks() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token");
+    if (!token && pathname !== "/login") {
+      router.push("/login");
+    }
+  }, [pathname, router]);
+
+  const handleLogout = () => {
+    localStorage.removeItem("auth_token");
+    router.push("/login");
+  };
 
   const links = [
     {
@@ -77,6 +91,19 @@ export default function SidebarLinks() {
           })}
         </div>
       ))}
+
+      {/* Logout Button */}
+      <div className="mt-6 pt-4 border-t border-slate-100">
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-xl font-semibold text-sm text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors w-full"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          <span>ออกจากระบบ (Logout)</span>
+        </button>
+      </div>
     </>
   );
 }

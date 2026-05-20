@@ -1,11 +1,14 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 import os
 from dotenv import load_dotenv
 import re
-from datetime import datetime, date, time
+import io
+from datetime import datetime, date, time, timedelta
 import models, schemas, database
+from auth import create_token, LoginRequest
 from database import engine, get_db
 from linebot.v3 import WebhookParser
 from linebot.v3.messaging import Configuration, AsyncApiClient, AsyncMessagingApi, ReplyMessageRequest, TextMessage
@@ -38,11 +41,22 @@ app = FastAPI(title="Sovereign Accounting API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ==========================================
+# Auth Endpoint
+# ==========================================
+@app.post("/auth/login")
+def login(req: LoginRequest):
+    admin_password = os.getenv('ADMIN_PASSWORD', 'horpak2026')
+    if req.password != admin_password:
+        raise HTTPException(status_code=401, detail="รหัสผ่านไม่ถูกต้อง")
+    token = create_token({"role": "admin"})
+    return {"access_token": token, "token_type": "bearer"}
 
 @app.on_event("startup")
 def seed_business_units():
@@ -321,6 +335,109 @@ def get_transaction_summary(db: Session = Depends(get_db)):
         units=unit_summaries
     )
 
+# ==========================================
+# Export Excel Endpoint
+# ==========================================
+@app.get("/transactions/export/excel")
+def export_transactions_excel(db: Session = Depends(get_db)):
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    transactions = db.query(models.Transaction).order_by(models.Transaction.created_at.desc()).all()
+    units = db.query(models.BusinessUnit).all()
+    unit_map = {u.id: u.name for u in units}
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "รายการบัญชี"
+    
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    
+    headers = ["ลำดับ", "วันที่", "ประเภท", "จำนวนเงิน (บาท)", "รายละเอียด", "ธุรกิจ"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center')
+        cell.border = thin_border
+    
+    income_fill = PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid")
+    expense_fill = PatternFill(start_color="FFEBEE", end_color="FFEBEE", fill_type="solid")
+    
+    for idx, tx in enumerate(transactions, 1):
+        row = idx + 1
+        tx_type = "รายรับ" if tx.type == models.TransactionType.INCOME else "รายจ่าย"
+        unit_name = unit_map.get(tx.unit_id, "ทั่วไป")
+        date_str = tx.created_at.strftime("%d/%m/%Y %H:%M") if tx.created_at else ""
+        fill = income_fill if tx.type == models.TransactionType.INCOME else expense_fill
+        
+        data = [idx, date_str, tx_type, float(tx.amount), tx.description, unit_name]
+        for col, value in enumerate(data, 1):
+            cell = ws.cell(row=row, column=col, value=value)
+            cell.border = thin_border
+            cell.fill = fill
+            if col == 4:
+                cell.number_format = '#,##0.00'
+                cell.alignment = Alignment(horizontal='right')
+    
+    for col in ws.columns:
+        max_length = max(len(str(cell.value or '')) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 40)
+    
+    total_income = sum(float(tx.amount) for tx in transactions if tx.type == models.TransactionType.INCOME)
+    total_expense = sum(float(tx.amount) for tx in transactions if tx.type == models.TransactionType.EXPENSE)
+    last_row = len(transactions) + 2
+    ws.cell(row=last_row, column=3, value="รวมรายรับ:").font = Font(bold=True)
+    ws.cell(row=last_row, column=4, value=total_income).font = Font(bold=True, color="228B22")
+    ws.cell(row=last_row, column=4).number_format = '#,##0.00'
+    ws.cell(row=last_row+1, column=3, value="รวมรายจ่าย:").font = Font(bold=True)
+    ws.cell(row=last_row+1, column=4, value=total_expense).font = Font(bold=True, color="FF0000")
+    ws.cell(row=last_row+1, column=4).number_format = '#,##0.00'
+    ws.cell(row=last_row+2, column=3, value="คงเหลือสุทธิ:").font = Font(bold=True)
+    ws.cell(row=last_row+2, column=4, value=total_income - total_expense).font = Font(bold=True, color="1F4E79")
+    ws.cell(row=last_row+2, column=4).number_format = '#,##0.00'
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f"sovereign_transactions_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+# ==========================================
+# Monthly Summary Endpoint (for Charts)
+# ==========================================
+@app.get("/transactions/monthly-summary")
+def get_monthly_summary(db: Session = Depends(get_db)):
+    six_months_ago = datetime.now() - timedelta(days=180)
+    
+    transactions = db.query(models.Transaction).filter(
+        models.Transaction.created_at >= six_months_ago
+    ).all()
+    
+    monthly_data = {}
+    for tx in transactions:
+        if tx.created_at:
+            key = tx.created_at.strftime("%Y-%m")
+            if key not in monthly_data:
+                monthly_data[key] = {"month": key, "income": 0.0, "expense": 0.0}
+            if tx.type == models.TransactionType.INCOME:
+                monthly_data[key]["income"] += float(tx.amount)
+            else:
+                monthly_data[key]["expense"] += float(tx.amount)
+    
+    result = sorted(monthly_data.values(), key=lambda x: x["month"])
+    return result[-6:] if len(result) > 6 else result
+
 def match_business_unit(description: str, db: Session) -> Optional[models.BusinessUnit]:
     units = db.query(models.BusinessUnit).all()
     if not units:
@@ -466,6 +583,55 @@ async def line_webhook(request: Request, db: Session = Depends(get_db)):
             )
             continue
 
+        # Command E: ทวงบิล
+        if text == "ทวงบิล":
+            unpaid_rooms = db.query(models.DormRoom).filter(
+                models.DormRoom.payment_status != "paid",
+                models.DormRoom.tenant != "",
+                models.DormRoom.tenant != None
+            ).all()
+            unpaid_houses = db.query(models.RentalHouse).filter(
+                models.RentalHouse.payment_status != "paid",
+                models.RentalHouse.tenant_name != "",
+                models.RentalHouse.tenant_name != None
+            ).all()
+            unpaid_jobs = db.query(models.GarageJob).filter(
+                models.GarageJob.payment_status != "paid"
+            ).all()
+            
+            lines = ["\U0001f514 สรุปบิลค้างชำระ"]
+            lines.append("=======================")
+            
+            if unpaid_rooms:
+                lines.append(f"\n\U0001f3e2 หอพัก ({len(unpaid_rooms)} ห้อง):")
+                for r in unpaid_rooms[:15]:
+                    total = r.rate + r.water_cost + r.electric_cost + r.cleaning_fee + r.other_fee + r.fine_cost
+                    lines.append(f"  ห้อง {r.number} ({r.dorm_key}) - {r.tenant}: {total:,.0f}\u0e3f")
+            
+            if unpaid_houses:
+                lines.append(f"\n\U0001f3e0 บ้านเช่า ({len(unpaid_houses)} หลัง):")
+                for h in unpaid_houses:
+                    total = h.monthly_rent + h.water_bill + h.electric_bill
+                    lines.append(f"  {h.name} - {h.tenant_name}: {total:,.0f}\u0e3f")
+            
+            if unpaid_jobs:
+                lines.append(f"\n\U0001f527 อู่ซ่อมรถ ({len(unpaid_jobs)} งาน):")
+                for j in unpaid_jobs[:10]:
+                    lines.append(f"  {j.license_plate} ({j.customer_name}): {j.total_cost:,.0f}\u0e3f")
+            
+            if not unpaid_rooms and not unpaid_houses and not unpaid_jobs:
+                lines.append("\n\u2705 ไม่มีบิลค้างชำระครับ! เก็บเงินครบทุกรายการแล้ว \U0001f389")
+            
+            reply_text = "\n".join(lines)
+            
+            await get_line_bot_api().reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)]
+                )
+            )
+            continue
+
         # Command D: รับ/จ่าย [amount] [description]
         match = re.match(r'^(รับ|จ่าย)\s+(\d+(?:\.\d+)?)\s+(.*)$', text, re.IGNORECASE)
         if match:
@@ -518,6 +684,36 @@ async def line_webhook(request: Request, db: Session = Depends(get_db)):
             continue
 
     return {"status": "ok"}
+
+# ==========================================
+# Billing Reminder API
+# ==========================================
+@app.post("/notify/billing-reminder")
+def send_billing_reminder(db: Session = Depends(get_db)):
+    unpaid_rooms = db.query(models.DormRoom).filter(
+        models.DormRoom.payment_status != "paid",
+        models.DormRoom.tenant != "",
+        models.DormRoom.tenant != None
+    ).all()
+    unpaid_houses = db.query(models.RentalHouse).filter(
+        models.RentalHouse.payment_status != "paid",
+        models.RentalHouse.tenant_name != "",
+        models.RentalHouse.tenant_name != None
+    ).all()
+    unpaid_jobs = db.query(models.GarageJob).filter(
+        models.GarageJob.payment_status != "paid"
+    ).all()
+    
+    return {
+        "status": "success",
+        "unpaid_rooms": len(unpaid_rooms),
+        "unpaid_houses": len(unpaid_houses),
+        "unpaid_jobs": len(unpaid_jobs),
+        "total_unpaid": len(unpaid_rooms) + len(unpaid_houses) + len(unpaid_jobs),
+        "rooms": [{"number": r.number, "dorm_key": r.dorm_key, "tenant": r.tenant} for r in unpaid_rooms],
+        "houses": [{"name": h.name, "tenant": h.tenant_name} for h in unpaid_houses],
+        "jobs": [{"plate": j.license_plate, "customer": j.customer_name, "cost": j.total_cost} for j in unpaid_jobs]
+    }
 
 # ==========================================
 # Dormitory (หอพัก) Endpoints

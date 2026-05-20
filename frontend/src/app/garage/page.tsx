@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { fetchGarageJobs, createGarageJob, updateGarageJob, deleteGarageJob } from "@/lib/api";
+import ReceiptModal from "./ReceiptModal";
 
 interface GarageJob {
   id: string;
@@ -122,6 +123,9 @@ export default function GaragePage() {
     }
   };
 
+  // Receipt state
+  const [receiptJob, setReceiptJob] = useState<GarageJob | null>(null);
+
   // Stats
   const activeJobs = jobs.filter(j => j.status !== "picked_up").length;
   const totalRevenue = jobs.reduce((sum, j) => sum + (j.paymentStatus === "paid" ? j.totalCost : 0), 0);
@@ -209,6 +213,11 @@ export default function GaragePage() {
                         <button onClick={() => openEdit(job)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                         </button>
+                        {(job.status === "finished" || job.status === "picked_up") && (
+                          <button onClick={() => setReceiptJob(job)} className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition" title="ใบเสร็จ">
+                            🧾
+                          </button>
+                        )}
                         <button onClick={() => deleteJob(job.id)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition">
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
@@ -326,6 +335,25 @@ export default function GaragePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Receipt Modal */}
+      {receiptJob && (
+        <ReceiptModal
+          job={{
+            id: Number(receiptJob.id),
+            customer_name: receiptJob.customerName,
+            license_plate: receiptJob.licensePlate,
+            car_model: receiptJob.carModel,
+            description: receiptJob.description,
+            status: receiptJob.status,
+            total_cost: receiptJob.totalCost,
+            payment_status: receiptJob.paymentStatus,
+            created_at: receiptJob.createdAt,
+            finished_at: receiptJob.finishedAt || null,
+          }}
+          onClose={() => setReceiptJob(null)}
+        />
       )}
     </div>
   );

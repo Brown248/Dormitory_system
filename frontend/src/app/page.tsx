@@ -642,7 +642,158 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      {/* ========== Monthly Trend Chart ========== */}
+      <MonthlyChart />
 
+    </div>
+  );
+}
+
+// ==========================================
+// Monthly Bar Chart Component
+// ==========================================
+const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+
+function MonthlyChart() {
+  const [data, setData] = useState<{month:string; income:number; expense:number}[]>([]);
+  const [billingResult, setBillingResult] = useState<any>(null);
+  const [showBilling, setShowBilling] = useState(false);
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  useEffect(() => {
+    fetch(`${API_BASE}/transactions/monthly-summary`)
+      .then(r => r.json())
+      .then(setData)
+      .catch(() => {});
+  }, []);
+
+  const checkBilling = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/notify/billing-reminder`, { method: "POST" });
+      const result = await res.json();
+      setBillingResult(result);
+      setShowBilling(true);
+    } catch { alert("ไม่สามารถเช็คบิลได้"); }
+  };
+
+  const maxVal = Math.max(...data.flatMap(d => [d.income, d.expense]), 1);
+
+  const formatMonth = (m: string) => {
+    const [y, mo] = m.split("-");
+    const monthIdx = parseInt(mo, 10) - 1;
+    return `${THAI_MONTHS[monthIdx]} ${(parseInt(y) + 543).toString().slice(-2)}`;
+  };
+
+  return (
+    <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h3 className="text-base font-black text-slate-800">📊 แนวโน้มรายรับ-รายจ่าย</h3>
+          <p className="text-xs text-slate-400 mt-0.5">6 เดือนล่าสุด</p>
+        </div>
+        <button onClick={checkBilling}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors"
+        >🔔 เช็คบิลค้างชำระ</button>
+      </div>
+
+      {data.length === 0 ? (
+        <div className="text-center py-12 text-slate-400 text-sm">ยังไม่มีข้อมูลรายเดือน</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <svg viewBox={`0 0 ${Math.max(data.length * 120, 400)} 260`} className="w-full" style={{ minWidth: 350 }}>
+            {/* Grid Lines */}
+            {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => (
+              <g key={i}>
+                <line x1="60" y1={220 - pct * 200} x2={data.length * 120 + 20} y2={220 - pct * 200}
+                  stroke="#f1f5f9" strokeWidth="1" />
+                <text x="55" y={225 - pct * 200} textAnchor="end" fontSize="9" fill="#94a3b8">
+                  {(maxVal * pct / 1000).toFixed(0)}K
+                </text>
+              </g>
+            ))}
+            {/* Bars */}
+            {data.map((d, i) => {
+              const x = 70 + i * 110;
+              const incomeH = (d.income / maxVal) * 200;
+              const expenseH = (d.expense / maxVal) * 200;
+              return (
+                <g key={d.month}>
+                  {/* Income Bar */}
+                  <rect x={x} y={220 - incomeH} width="36" height={incomeH} rx="4"
+                    fill="url(#incomeGrad)" opacity="0.9">
+                    <title>รายรับ: {d.income.toLocaleString()} ฿</title>
+                  </rect>
+                  <text x={x + 18} y={215 - incomeH} textAnchor="middle" fontSize="8" fill="#059669" fontWeight="bold">
+                    {d.income > 0 ? `${(d.income/1000).toFixed(0)}K` : ''}
+                  </text>
+                  {/* Expense Bar */}
+                  <rect x={x + 42} y={220 - expenseH} width="36" height={expenseH} rx="4"
+                    fill="url(#expenseGrad)" opacity="0.9">
+                    <title>รายจ่าย: {d.expense.toLocaleString()} ฿</title>
+                  </rect>
+                  <text x={x + 60} y={215 - expenseH} textAnchor="middle" fontSize="8" fill="#e11d48" fontWeight="bold">
+                    {d.expense > 0 ? `${(d.expense/1000).toFixed(0)}K` : ''}
+                  </text>
+                  {/* Month Label */}
+                  <text x={x + 39} y={240} textAnchor="middle" fontSize="10" fill="#64748b" fontWeight="600">
+                    {formatMonth(d.month)}
+                  </text>
+                </g>
+              );
+            })}
+            {/* Gradients */}
+            <defs>
+              <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#34d399" />
+                <stop offset="100%" stopColor="#059669" />
+              </linearGradient>
+              <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#fb7185" />
+                <stop offset="100%" stopColor="#e11d48" />
+              </linearGradient>
+            </defs>
+          </svg>
+          {/* Legend */}
+          <div className="flex justify-center gap-6 mt-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+              <div className="w-3 h-3 rounded-sm bg-emerald-500" /> รายรับ
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+              <div className="w-3 h-3 rounded-sm bg-rose-500" /> รายจ่าย
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Billing Reminder Modal */}
+      {showBilling && billingResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowBilling(false)}>
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-black text-slate-800 mb-4">🔔 สรุปบิลค้างชำระ</h3>
+            <div className="space-y-3 mb-6">
+              <div className="flex justify-between items-center p-3 bg-blue-50 rounded-xl">
+                <span className="text-sm font-semibold text-blue-700">🏢 หอพัก</span>
+                <span className="text-lg font-black text-blue-800">{billingResult.unpaid_rooms} ห้อง</span>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-amber-50 rounded-xl">
+                <span className="text-sm font-semibold text-amber-700">🏠 บ้านเช่า</span>
+                <span className="text-lg font-black text-amber-800">{billingResult.unpaid_houses} หลัง</span>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-orange-50 rounded-xl">
+                <span className="text-sm font-semibold text-orange-700">🔧 อู่ซ่อมรถ</span>
+                <span className="text-lg font-black text-orange-800">{billingResult.unpaid_jobs} งาน</span>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-slate-800 rounded-xl">
+                <span className="text-sm font-bold text-white">รวมทั้งหมด</span>
+                <span className="text-xl font-black text-emerald-400">{billingResult.total_unpaid} รายการ</span>
+              </div>
+            </div>
+            <button onClick={() => setShowBilling(false)}
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition text-sm"
+            >ปิด</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

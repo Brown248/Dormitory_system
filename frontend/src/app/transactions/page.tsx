@@ -509,6 +509,21 @@ export default function FinancialAccountingPage() {
               พบ {processedTransactions.length} รายการ
             </span>
           </div>
+          <button
+            onClick={() => {
+              const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+              const a = document.createElement("a");
+              a.href = `${API_BASE}/transactions/export/excel`;
+              a.download = "transactions.xlsx";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+          >
+            📥 ส่งออก Excel
+          </button>
+          </div>
           <span className="text-[10px] text-slate-400 font-bold">คัดกรอง ค้นหา และจัดเรียง</span>
         </div>
 
