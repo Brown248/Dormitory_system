@@ -523,7 +523,8 @@ export default function FinancialAccountingPage() {
           >
             📥 ส่งออก Excel
           </button>
-          </div>
+        </div>
+        <div className="flex justify-between items-center">
           <span className="text-[10px] text-slate-400 font-bold">คัดกรอง ค้นหา และจัดเรียง</span>
         </div>
 
